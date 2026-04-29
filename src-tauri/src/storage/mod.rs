@@ -88,7 +88,7 @@ impl ConfigManager {
     }
 
     pub async fn load(&self) -> Result<AppConfig> {
-        if let Some(config) = self.cache.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+        if let Some(config) = crate::lock_or_recover!(self.cache, "config_cache").clone() {
             return Ok(config);
         }
 
@@ -100,12 +100,12 @@ impl ConfigManager {
             Err(_) => AppConfig::default(),
         };
 
-        *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(config.clone());
+        *crate::lock_or_recover!(self.cache, "config_cache") = Some(config.clone());
         Ok(config)
     }
 
     pub async fn save(&self, config: &AppConfig) -> Result<()> {
-        *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(config.clone());
+        *crate::lock_or_recover!(self.cache, "config_cache") = Some(config.clone());
 
         let store = self
             .app_handle
@@ -162,7 +162,7 @@ impl HistoryStore {
     }
 
     pub async fn add(&self, entry: HistoryEntry) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = crate::lock_or_recover!(self.conn, "storage_conn");
         conn.execute(
             "INSERT INTO history (created_at, app_name, app_type, raw_text, polished_text, language, duration_ms)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -187,7 +187,7 @@ impl HistoryStore {
     }
 
     pub async fn list(&self, limit: u32, offset: u32) -> Result<Vec<HistoryEntry>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = crate::lock_or_recover!(self.conn, "storage_conn");
         let mut stmt = conn.prepare(
             "SELECT id, created_at, app_name, app_type, raw_text, polished_text, language, duration_ms
              FROM history ORDER BY id DESC LIMIT ?1 OFFSET ?2"
@@ -212,7 +212,7 @@ impl HistoryStore {
     }
 
     pub async fn clear(&self) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = crate::lock_or_recover!(self.conn, "storage_conn");
         conn.execute("DELETE FROM history", [])?;
         Ok(())
     }
@@ -248,7 +248,7 @@ impl DictionaryStore {
     }
 
     pub async fn add(&self, word: &str, pronunciation: Option<&str>) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = crate::lock_or_recover!(self.conn, "storage_conn");
         conn.execute(
             "INSERT INTO dictionary (word, pronunciation) VALUES (?1, ?2)",
             rusqlite::params![word, pronunciation],
@@ -257,7 +257,7 @@ impl DictionaryStore {
     }
 
     pub async fn remove(&self, id: i64) -> Result<()> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = crate::lock_or_recover!(self.conn, "storage_conn");
         conn.execute(
             "DELETE FROM dictionary WHERE id = ?1",
             rusqlite::params![id],
@@ -266,7 +266,7 @@ impl DictionaryStore {
     }
 
     pub async fn list(&self) -> Result<Vec<DictionaryEntry>> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = crate::lock_or_recover!(self.conn, "storage_conn");
         let mut stmt = conn.prepare("SELECT id, word, pronunciation FROM dictionary")?;
         let rows = stmt.query_map([], |row| {
             Ok(DictionaryEntry {
@@ -283,7 +283,7 @@ impl DictionaryStore {
     }
 
     pub async fn words(&self) -> Vec<String> {
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let conn = crate::lock_or_recover!(self.conn, "storage_conn");
         let mut stmt = match conn.prepare("SELECT word FROM dictionary") {
             Ok(s) => s,
             Err(_) => return Vec::new(),

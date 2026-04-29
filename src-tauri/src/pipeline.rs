@@ -163,7 +163,7 @@ impl PipelineHandle {
 
         // Stop audio capture (closes channel → STT task terminates naturally)
         {
-            let mut handle = self.audio_handle.lock().unwrap_or_else(|e| e.into_inner());
+            let mut handle = crate::lock_or_recover!(self.audio_handle, "audio_handle");
             if let Some(ref mut h) = *handle {
                 h.stop();
             }
@@ -174,7 +174,7 @@ impl PipelineHandle {
         self.stt_done.notify_one();
 
         // Clear accumulated text
-        self.accumulated_text.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        crate::lock_or_recover!(self.accumulated_text, "accumulated_text").clear();
 
         // Force state to Idle — emits pipeline:state event to sync frontend
         self.set_state(PipelineState::Idle);
@@ -404,8 +404,8 @@ impl PipelineHandle {
             return Ok(());
         }
         let audio_vol = handle.get_volume();
-        *self.audio_volume.lock().unwrap_or_else(|e| e.into_inner()) = audio_vol;
-        *self.audio_handle.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+        *crate::lock_or_recover!(self.audio_volume, "audio_volume") = audio_vol;
+        *crate::lock_or_recover!(self.audio_handle, "audio_handle") = Some(handle);
 
         *self
             .recording_start
@@ -458,7 +458,7 @@ impl PipelineHandle {
                                 // Audio channel closed — disconnect and capture final transcript
                                 match provider.disconnect().await {
                                     Ok(Some(text)) => {
-                                        let mut acc = accumulated.lock().unwrap_or_else(|e| e.into_inner());
+                                        let mut acc = crate::lock_or_recover!(accumulated, "accumulated_text");
                                         acc.push_str(&text);
                                         let current = acc.clone();
                                         drop(acc);
@@ -480,7 +480,7 @@ impl PipelineHandle {
                                 let _ = app_handle.emit("stt:partial", &text);
                             }
                             Ok(Some(TranscriptEvent::Final { text, .. })) => {
-                                let mut acc = accumulated.lock().unwrap_or_else(|e| e.into_inner());
+                                let mut acc = crate::lock_or_recover!(accumulated, "accumulated_text");
                                 acc.push_str(&text);
                                 acc.push(' ');
                                 let current = acc.clone();
@@ -514,7 +514,10 @@ impl PipelineHandle {
 
     pub async fn stop(&self) -> Result<()> {
         let guard = self.pipeline_lock.lock().await;
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        // Small debounce to avoid race between rapid press/release and
+        // background task startup. Uses async sleep so we don't block a
+        // tokio worker thread.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 
         if self
             .state
@@ -559,7 +562,7 @@ impl PipelineHandle {
             .unwrap_or_else(|e| e.into_inner()) = selected_text;
 
         {
-            let mut handle = self.audio_handle.lock().unwrap_or_else(|e| e.into_inner());
+            let mut handle = crate::lock_or_recover!(self.audio_handle, "audio_handle");
             if let Some(ref mut h) = *handle {
                 h.stop();
             }
@@ -806,7 +809,7 @@ impl PipelineHandle {
 
         // Push polished result into context ring buffer (max 3 sentences).
         if !final_text.is_empty() {
-            let mut ctx = self.context_store.lock().unwrap_or_else(|e| e.into_inner());
+            let mut ctx = crate::lock_or_recover!(self.context_store, "context_store");
             if ctx.len() >= 3 {
                 ctx.pop_front();
             }
@@ -854,7 +857,8 @@ impl PipelineHandle {
         };
 
         let output = output::create_output(effective_mode);
-        output.type_text(text).await?;
+        let safe_text = output::sanitize_output(text);
+        output.type_text(&safe_text).await?;
 
         let _ = self.app_handle.emit("pipeline:target_app", app_name);
 

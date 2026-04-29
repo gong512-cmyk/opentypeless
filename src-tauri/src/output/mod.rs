@@ -16,6 +16,26 @@ pub trait TextOutput: Send + Sync {
     fn mode(&self) -> OutputMode;
 }
 
+/// Sanitize text before outputting it via keyboard or clipboard.
+/// Removes control characters (except tab and newline) to prevent
+/// accidental injection of escape sequences or other unwanted behavior.
+pub fn sanitize_output(text: &str) -> String {
+    text.chars()
+        .filter(|c| {
+            let cp = *c as u32;
+            // Allow printable ASCII, tab, newline, and all non-ASCII (Unicode letters/symbols)
+            // Block: null, bell, backspace, form feed, carriage return (we normalize later),
+            // escape, delete, and C1 control codes.
+            match cp {
+                0x09 | 0x0A => true, // tab, newline
+                0x20..=0x7E => true, // printable ASCII
+                0x80..=0x10FFFF => true, // Unicode beyond ASCII (includes CJK)
+                _ => false, // control characters
+            }
+        })
+        .collect()
+}
+
 pub fn create_output(mode: OutputMode) -> Box<dyn TextOutput> {
     match mode {
         OutputMode::Keyboard => Box::new(keyboard::KeyboardOutput::new()),

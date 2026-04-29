@@ -3288,7 +3288,7 @@ dependencies = [
 
 [[package]]
 name = "opentypeless"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -3312,6 +3312,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-sql",
  "tauri-plugin-store",
+ "tempfile",
  "tokio",
  "tokio-tungstenite",
  "tracing",

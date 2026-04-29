@@ -80,16 +80,9 @@ impl SttProvider for LocalWhisperProvider {
         let wav_data = WhisperCompatProvider::build_wav(&self.audio_buffer, config.sample_rate);
         self.audio_buffer.clear();
 
-        let temp_dir = std::env::temp_dir();
-        let temp_path = temp_dir.join(format!(
-            "opentypeless_recording_{}.wav",
-            std::process::id()
-        ));
-
-        {
-            let mut file = std::fs::File::create(&temp_path)?;
-            file.write_all(&wav_data)?;
-        }
+        let mut temp_file = tempfile::NamedTempFile::with_suffix(".wav")?;
+        temp_file.write_all(&wav_data)?;
+        let temp_path = temp_file.into_temp_path();
 
         let lang = match &config.language {
             Some(l) if l == "multi" => "auto",
@@ -117,14 +110,13 @@ impl SttProvider for LocalWhisperProvider {
 
         let output = cmd.output()
             .map_err(|e| {
-                // Try to clean up temp file even on spawn failure
-                let _ = std::fs::remove_file(&temp_path);
+                // Temp file is cleaned up automatically when temp_path is dropped
                 anyhow::anyhow!("whisper-cli not found or failed to start: {}", e)
             })?;
 
-        if let Err(e) = std::fs::remove_file(&temp_path) {
-            tracing::warn!("Failed to remove temp file {}: {e}", temp_path.display());
-        }
+        // Explicitly keep the temp file alive until after the subprocess finishes,
+        // then let it be deleted automatically on drop.
+        drop(temp_path);
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

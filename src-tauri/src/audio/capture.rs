@@ -1,5 +1,6 @@
 use anyhow::Result;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
@@ -36,6 +37,8 @@ pub struct AudioCaptureHandle {
     stop_tx: Option<std::sync::mpsc::Sender<()>>,
     volume: Arc<Mutex<f32>>,
     state: Arc<Mutex<CaptureState>>,
+    /// Set to true once the capture thread has fully exited.
+    stopped: Arc<AtomicBool>,
 }
 
 impl AudioCaptureHandle {
@@ -45,15 +48,18 @@ impl AudioCaptureHandle {
         let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
         let volume = Arc::new(Mutex::new(0.0f32));
         let state = Arc::new(Mutex::new(CaptureState::Recording));
+        let stopped = Arc::new(AtomicBool::new(false));
 
         let vol_clone = volume.clone();
         let state_clone = state.clone();
+        let stopped_clone = stopped.clone();
 
         // Audio capture must run on a dedicated OS thread because cpal::Stream is !Send
         std::thread::spawn(move || {
             if let Err(e) = run_capture(config, audio_tx, stop_rx, vol_clone, state_clone) {
                 tracing::error!("Audio capture thread error: {}", e);
             }
+            stopped_clone.store(true, Ordering::SeqCst);
         });
 
         Ok((
@@ -61,6 +67,7 @@ impl AudioCaptureHandle {
                 stop_tx: Some(stop_tx),
                 volume,
                 state,
+                stopped,
             },
             audio_rx,
         ))
@@ -69,16 +76,21 @@ impl AudioCaptureHandle {
     pub fn stop(&mut self) {
         // Signal the capture thread to stop
         self.stop_tx = None;
-        *self.volume.lock().unwrap_or_else(|e| e.into_inner()) = 0.0;
-        *self.state.lock().unwrap_or_else(|e| e.into_inner()) = CaptureState::Idle;
+        *crate::lock_or_recover!(self.volume, "audio_volume") = 0.0;
+        *crate::lock_or_recover!(self.state, "audio_state") = CaptureState::Idle;
+    }
+
+    /// Returns true if the capture thread has fully exited.
+    pub fn is_stopped(&self) -> bool {
+        self.stopped.load(Ordering::SeqCst)
     }
 
     pub fn get_volume(&self) -> f32 {
-        *self.volume.lock().unwrap_or_else(|e| e.into_inner())
+        *crate::lock_or_recover!(self.volume, "audio_volume")
     }
 
     pub fn state(&self) -> CaptureState {
-        *self.state.lock().unwrap_or_else(|e| e.into_inner())
+        *crate::lock_or_recover!(self.state, "audio_state")
     }
 }
 
@@ -177,7 +189,7 @@ fn run_capture(
             };
 
             // Convert f32 to i16 PCM and buffer
-            let mut buf = buffer.lock().unwrap_or_else(|e| e.into_inner());
+            let mut buf = crate::lock_or_recover!(buffer, "audio_buffer");
             for &sample in &resampled {
                 if buf.len() >= MAX_BUFFER_SAMPLES {
                     break;
@@ -200,7 +212,7 @@ fn run_capture(
     )?;
 
     stream.play()?;
-    *state.lock().unwrap_or_else(|e| e.into_inner()) = CaptureState::Recording;
+    *crate::lock_or_recover!(state, "audio_state") = CaptureState::Recording;
     tracing::info!(
         "Audio capture started (device: {}Hz {}ch -> target: {}Hz {}ch)",
         device_sample_rate,
@@ -214,7 +226,7 @@ fn run_capture(
 
     // Stream is dropped here, stopping capture
     drop(stream);
-    *state.lock().unwrap_or_else(|e| e.into_inner()) = CaptureState::Idle;
+    *crate::lock_or_recover!(state, "audio_state") = CaptureState::Idle;
     tracing::info!("Audio capture stopped");
     Ok(())
 }

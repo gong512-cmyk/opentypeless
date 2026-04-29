@@ -28,7 +28,7 @@ describe('appStore', () => {
       const { config } = getState()
       expect(config.theme).toBe('system')
       expect(config.hotkey).toBe('Ctrl+/')
-      expect(config.output_mode).toBe('keyboard')
+      expect(config.output_mode).toBe('clipboard')
       expect(config.polish_enabled).toBe(true)
     })
 

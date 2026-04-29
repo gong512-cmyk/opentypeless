@@ -17,6 +17,21 @@ use tracing_subscriber::EnvFilter;
 
 use std::sync::{Arc, Mutex};
 
+/// Lock a std::sync::Mutex, logging a warning if it was poisoned.
+#[macro_export]
+macro_rules! lock_or_recover {
+    ($mutex:expr, $name:expr) => {
+        $mutex.lock().unwrap_or_else(|e| {
+            tracing::warn!(
+                target: "mutex_poison",
+                "Mutex '{}' was poisoned, recovering gracefully",
+                $name
+            );
+            e.into_inner()
+        })
+    };
+}
+
 /// Default cloud API base URL. Override with the `API_BASE_URL` environment variable.
 pub const DEFAULT_API_BASE_URL: &str = "https://www.opentypeless.com";
 
@@ -156,9 +171,36 @@ async fn update_config(
     close_tray_cache: tauri::State<'_, CloseToTrayCache>,
     config: storage::AppConfig,
 ) -> Result<(), String> {
-    *cache.0.lock().unwrap_or_else(|e| e.into_inner()) = config.hotkey_mode.clone();
-    *close_tray_cache.0.lock().unwrap_or_else(|e| e.into_inner()) = config.close_to_tray;
+    *crate::lock_or_recover!(cache.0, "hotkey_mode_cache") = config.hotkey_mode.clone();
+    *crate::lock_or_recover!(close_tray_cache.0, "close_to_tray_cache") = config.close_to_tray;
     state.save(&config).await.map_err(|e| e.to_string())
+}
+
+/// Return the endpoint, model, and extra fields for a Whisper-compatible STT provider.
+fn whisper_compat_config(provider: &str) -> Option<(&'static str, &'static str, &'static [(&'static str, &'static str)])> {
+    match provider {
+        "glm-asr" => Some((
+            "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions",
+            "glm-asr-2512",
+            &[("stream", "false")],
+        )),
+        "openai-whisper" => Some((
+            "https://api.openai.com/v1/audio/transcriptions",
+            "whisper-1",
+            &[],
+        )),
+        "groq-whisper" => Some((
+            "https://api.groq.com/openai/v1/audio/transcriptions",
+            "whisper-large-v3-turbo",
+            &[],
+        )),
+        "siliconflow" => Some((
+            "https://api.siliconflow.cn/v1/audio/transcriptions",
+            "FunAudioLLM/SenseVoiceSmall",
+            &[],
+        )),
+        _ => None,
+    }
 }
 
 #[tauri::command]
@@ -173,11 +215,7 @@ async fn test_stt_connection(
 
     // Cloud provider: verify session token + Pro status via API
     if provider == "cloud" {
-        let token = token_store
-            .0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let token = crate::lock_or_recover!(token_store.0, "session_token").clone();
         if token.is_empty() {
             return Ok(false);
         }
@@ -225,30 +263,9 @@ async fn test_stt_connection(
             Ok(resp.status().is_success())
         }
         "glm-asr" | "openai-whisper" | "groq-whisper" | "siliconflow" => {
-            // All four use Whisper-compatible file upload API
-            let (endpoint, model, extra_fields): (&str, &str, &[(&str, &str)]) =
-                match provider.as_str() {
-                    "glm-asr" => (
-                        "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions",
-                        "glm-asr-2512",
-                        &[("stream", "false")][..],
-                    ),
-                    "openai-whisper" => (
-                        "https://api.openai.com/v1/audio/transcriptions",
-                        "whisper-1",
-                        &[][..],
-                    ),
-                    "groq-whisper" => (
-                        "https://api.groq.com/openai/v1/audio/transcriptions",
-                        "whisper-large-v3-turbo",
-                        &[][..],
-                    ),
-                    _ => (
-                        "https://api.siliconflow.cn/v1/audio/transcriptions",
-                        "FunAudioLLM/SenseVoiceSmall",
-                        &[][..],
-                    ),
-                };
+            let Some((endpoint, model, extra_fields)) = whisper_compat_config(&provider) else {
+                return Err(format!("Unknown STT provider: {}", provider));
+            };
 
             let silent_pcm = vec![0u8; 3200]; // 0.1s at 16kHz 16-bit mono
             let wav = stt::whisper_compat::WhisperCompatProvider::build_wav(&silent_pcm, 16000);
@@ -293,11 +310,7 @@ async fn test_llm_connection(
 
     // Cloud provider: verify session token + Pro status via API
     if provider == "cloud" {
-        let token = token_store
-            .0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let token = crate::lock_or_recover!(token_store.0, "session_token").clone();
         if token.is_empty() {
             return Ok(false);
         }
@@ -410,11 +423,7 @@ async fn bench_stt_connection(
     }
 
     if provider == "cloud" {
-        let token = token_store
-            .0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let token = crate::lock_or_recover!(token_store.0, "session_token").clone();
         if token.is_empty() {
             return Err("Not signed in".to_string());
         }
@@ -477,29 +486,9 @@ async fn bench_stt_connection(
             Ok(elapsed)
         }
         "glm-asr" | "openai-whisper" | "groq-whisper" | "siliconflow" => {
-            let (endpoint, model, extra_fields): (&str, &str, &[(&str, &str)]) =
-                match provider.as_str() {
-                    "glm-asr" => (
-                        "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions",
-                        "glm-asr-2512",
-                        &[("stream", "false")][..],
-                    ),
-                    "openai-whisper" => (
-                        "https://api.openai.com/v1/audio/transcriptions",
-                        "whisper-1",
-                        &[][..],
-                    ),
-                    "groq-whisper" => (
-                        "https://api.groq.com/openai/v1/audio/transcriptions",
-                        "whisper-large-v3-turbo",
-                        &[][..],
-                    ),
-                    _ => (
-                        "https://api.siliconflow.cn/v1/audio/transcriptions",
-                        "FunAudioLLM/SenseVoiceSmall",
-                        &[][..],
-                    ),
-                };
+            let Some((endpoint, model, extra_fields)) = whisper_compat_config(&provider) else {
+                return Err(format!("Unknown STT provider: {}", provider));
+            };
 
             let silent_pcm = vec![0u8; 3200]; // 0.1s at 16kHz 16-bit mono
             let wav = stt::whisper_compat::WhisperCompatProvider::build_wav(&silent_pcm, 16000);
@@ -548,11 +537,7 @@ async fn bench_llm_connection(
     }
 
     if provider == "cloud" {
-        let token = token_store
-            .0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let token = crate::lock_or_recover!(token_store.0, "session_token").clone();
         if token.is_empty() {
             return Err("Not signed in".to_string());
         }
@@ -673,7 +658,7 @@ async fn set_session_token(
     state: tauri::State<'_, SessionTokenStore>,
     token: String,
 ) -> Result<(), String> {
-    *state.0.lock().unwrap_or_else(|e| e.into_inner()) = token;
+    *crate::lock_or_recover!(state.0, "session_token") = token;
     Ok(())
 }
 
@@ -778,12 +763,11 @@ fn build_shortcut_handler(
         let handle = app_handle.clone();
         match event.state {
             ShortcutState::Pressed => {
-                let hotkey_mode = handle
-                    .state::<HotkeyModeCache>()
-                    .0
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .clone();
+                let hotkey_mode = crate::lock_or_recover!(
+                    handle.state::<HotkeyModeCache>().0,
+                    "hotkey_mode_cache"
+                )
+                .clone();
                 tauri::async_runtime::spawn(async move {
                     let pipeline = handle.state::<pipeline::PipelineHandle>();
 
@@ -804,12 +788,11 @@ fn build_shortcut_handler(
                 });
             }
             ShortcutState::Released => {
-                let hotkey_mode = handle
-                    .state::<HotkeyModeCache>()
-                    .0
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .clone();
+                let hotkey_mode = crate::lock_or_recover!(
+                    handle.state::<HotkeyModeCache>().0,
+                    "hotkey_mode_cache"
+                )
+                .clone();
                 if hotkey_mode != "toggle" {
                     tauri::async_runtime::spawn(async move {
                         let pipeline = handle.state::<pipeline::PipelineHandle>();
@@ -1235,11 +1218,10 @@ pub fn run() {
                 let handle = app.handle().clone();
                 main_window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                        let close_to_tray = *handle
-                            .state::<CloseToTrayCache>()
-                            .0
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
+                        let close_to_tray = *crate::lock_or_recover!(
+                            handle.state::<CloseToTrayCache>().0,
+                            "close_to_tray_cache"
+                        );
                         if close_to_tray {
                             api.prevent_close();
                             // Save window state before hiding (skip if minimized)
