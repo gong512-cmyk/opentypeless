@@ -23,6 +23,10 @@ vi.mock('react-i18next', () => ({
         'settings.sttSignInHint': 'Sign in to use cloud STT',
         'settings.sttUpgradeHint': 'Upgrade to Pro to use cloud STT',
         'settings.sttProActive': 'Cloud STT active',
+        'settings.sttEndpoint': 'STT Endpoint URL',
+        'settings.xiaomiPreset': 'Use Xiaomi Preset',
+        'settings.xiaomiPresetHint': 'Xiaomi hint',
+        'settings.xiaomiPresetHintCompatible': 'Xiaomi compatible hint',
       }
       return translations[key] || key
     },
@@ -34,6 +38,8 @@ const mockAppStore = {
   config: {
     stt_provider: 'deepgram' as string,
     stt_api_key: '',
+    stt_base_url: '',
+    stt_model: '',
     stt_language: 'en',
   },
   updateConfig: vi.fn(),
@@ -72,6 +78,8 @@ describe('SttPane', () => {
     mockAppStore.config = {
       stt_provider: 'deepgram',
       stt_api_key: '',
+      stt_base_url: '',
+      stt_model: '',
       stt_language: 'en',
     }
     mockAppStore.sttTestStatus = 'idle'
@@ -168,6 +176,38 @@ describe('SttPane', () => {
     })
   })
 
+  describe('Xiaomi preset button', () => {
+    it('shows preset button only for custom whisper provider', () => {
+      render(<SttPane />)
+      expect(screen.queryByRole('button', { name: 'Use Xiaomi Preset' })).not.toBeInTheDocument()
+
+      mockAppStore.config.stt_provider = 'custom-whisper'
+      cleanup()
+      render(<SttPane />)
+      expect(screen.getByRole('button', { name: 'Use Xiaomi Preset' })).toBeInTheDocument()
+
+      mockAppStore.config.stt_provider = 'xiaomi-mimo'
+      cleanup()
+      render(<SttPane />)
+      expect(screen.getByRole('button', { name: 'Use Xiaomi Preset' })).toBeInTheDocument()
+    })
+
+    it('fills endpoint and model when preset button is clicked', () => {
+      mockAppStore.config.stt_provider = 'custom-whisper'
+      render(<SttPane />)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Use Xiaomi Preset' }))
+
+      expect(mockAppStore.updateConfig).toHaveBeenCalledWith({
+        stt_provider: 'xiaomi-mimo',
+        stt_base_url: 'https://token-plan-cn.xiaomimimo.com/v1',
+        stt_model: 'mimo-v2.5',
+      })
+      expect(mockAppStore.setSttTestStatus).toHaveBeenCalledWith('idle')
+      expect(mockAppStore.setSttLatencyMs).toHaveBeenCalledWith(null)
+    })
+  })
+
   describe('Test button and latency display', () => {
     it('test button is disabled when API key is empty', () => {
       render(<SttPane />)
@@ -210,7 +250,7 @@ describe('SttPane', () => {
       })
 
       await waitFor(() => {
-        expect(mockBenchStt).toHaveBeenCalledWith('sk-test123', 'deepgram')
+        expect(mockBenchStt).toHaveBeenCalledWith('sk-test123', 'deepgram', '', '')
       })
     })
 

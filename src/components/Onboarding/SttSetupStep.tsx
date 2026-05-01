@@ -8,11 +8,17 @@ export function SttSetupStep() {
   const updateConfig = useAppStore((s) => s.updateConfig)
   const sttTestStatus = useAppStore((s) => s.sttTestStatus)
   const setSttTestStatus = useAppStore((s) => s.setSttTestStatus)
+  const isCustomWhisper = config.stt_provider === 'custom-whisper'
 
   const handleTest = async () => {
     setSttTestStatus('testing')
     try {
-      const ok = await testSttConnection(config.stt_api_key, config.stt_provider)
+      const ok = await testSttConnection(
+        config.stt_api_key,
+        config.stt_provider,
+        config.stt_base_url,
+        config.stt_model,
+      )
       setSttTestStatus(ok ? 'success' : 'error')
     } catch {
       setSttTestStatus('error')
@@ -52,7 +58,11 @@ export function SttSetupStep() {
           />
           <button
             onClick={handleTest}
-            disabled={!config.stt_api_key || sttTestStatus === 'testing'}
+            disabled={
+              !config.stt_api_key ||
+              sttTestStatus === 'testing' ||
+              (isCustomWhisper && (!config.stt_base_url.trim() || !config.stt_model.trim()))
+            }
             className="px-4 py-2.5 bg-accent text-white rounded-[10px] text-[13px] border-none cursor-pointer hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5"
           >
             {sttTestStatus === 'testing' && <Loader2 size={14} className="animate-spin" />}
@@ -61,6 +71,36 @@ export function SttSetupStep() {
         </div>
         <TestStatusHint status={sttTestStatus} />
       </Field>
+
+      {isCustomWhisper && (
+        <>
+          <Field label="STT Endpoint URL">
+            <input
+              type="text"
+              value={config.stt_base_url}
+              onChange={(e) => {
+                updateConfig({ stt_base_url: e.target.value })
+                setSttTestStatus('idle')
+              }}
+              placeholder="https://your-provider.com/v1/audio/transcriptions"
+              className="w-full px-3 py-2.5 bg-bg-secondary border border-border rounded-[10px] text-[13px] text-text-primary outline-none focus:border-border-focus transition-colors"
+            />
+          </Field>
+
+          <Field label="Model">
+            <input
+              type="text"
+              value={config.stt_model}
+              onChange={(e) => {
+                updateConfig({ stt_model: e.target.value })
+                setSttTestStatus('idle')
+              }}
+              placeholder="whisper-1"
+              className="w-full px-3 py-2.5 bg-bg-secondary border border-border rounded-[10px] text-[13px] text-text-primary outline-none focus:border-border-focus transition-colors"
+            />
+          </Field>
+        </>
+      )}
     </div>
   )
 }

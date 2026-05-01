@@ -9,6 +9,8 @@ export type SttProvider =
   | 'openai-whisper'
   | 'groq-whisper'
   | 'siliconflow'
+  | 'custom-whisper'
+  | 'xiaomi-mimo'
   | 'local-whisper'
   | 'cloud'
 export type LlmProvider =
@@ -48,6 +50,8 @@ export interface DictionaryEntry {
 export interface AppConfig {
   stt_provider: SttProvider
   stt_api_key: string
+  stt_base_url: string
+  stt_model: string
   stt_language: string
   llm_provider: LlmProvider
   llm_api_key: string
@@ -165,6 +169,8 @@ const isMac =
 const defaultConfig: AppConfig = {
   stt_provider: 'glm-asr',
   stt_api_key: '',
+  stt_base_url: '',
+  stt_model: '',
   stt_language: 'multi',
   llm_provider: 'openrouter',
   llm_api_key: '',

@@ -24,8 +24,13 @@ export async function updateConfig(config: AppConfig): Promise<void> {
 }
 
 // Connection test
-export async function testSttConnection(apiKey: string, provider: string): Promise<boolean> {
-  return invoke('test_stt_connection', { apiKey, provider })
+export async function testSttConnection(
+  apiKey: string,
+  provider: string,
+  sttBaseUrl?: string,
+  sttModel?: string,
+): Promise<boolean> {
+  return invoke('test_stt_connection', { apiKey, provider, sttBaseUrl, sttModel })
 }
 
 export async function testLlmConnection(
@@ -38,8 +43,13 @@ export async function testLlmConnection(
 }
 
 // Latency benchmark — returns round-trip time in milliseconds
-export async function benchSttConnection(apiKey: string, provider: string): Promise<number> {
-  return invoke('bench_stt_connection', { apiKey, provider })
+export async function benchSttConnection(
+  apiKey: string,
+  provider: string,
+  sttBaseUrl?: string,
+  sttModel?: string,
+): Promise<number> {
+  return invoke('bench_stt_connection', { apiKey, provider, sttBaseUrl, sttModel })
 }
 
 export async function benchLlmConnection(

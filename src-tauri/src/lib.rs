@@ -177,36 +177,68 @@ async fn update_config(
 }
 
 /// Return the endpoint, model, and extra fields for a Whisper-compatible STT provider.
-fn whisper_compat_config(provider: &str) -> Option<(&'static str, &'static str, &'static [(&'static str, &'static str)])> {
+fn whisper_compat_config(
+    provider: &str,
+    custom_stt_base_url: Option<&str>,
+    custom_stt_model: Option<&str>,
+) -> Option<(String, String, Vec<(String, String)>)> {
     match provider {
         "glm-asr" => Some((
-            "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions",
-            "glm-asr-2512",
-            &[("stream", "false")],
+            "https://open.bigmodel.cn/api/paas/v4/audio/transcriptions".to_string(),
+            "glm-asr-2512".to_string(),
+            vec![("stream".to_string(), "false".to_string())],
         )),
         "openai-whisper" => Some((
-            "https://api.openai.com/v1/audio/transcriptions",
-            "whisper-1",
-            &[],
+            "https://api.openai.com/v1/audio/transcriptions".to_string(),
+            "whisper-1".to_string(),
+            vec![],
         )),
         "groq-whisper" => Some((
-            "https://api.groq.com/openai/v1/audio/transcriptions",
-            "whisper-large-v3-turbo",
-            &[],
+            "https://api.groq.com/openai/v1/audio/transcriptions".to_string(),
+            "whisper-large-v3-turbo".to_string(),
+            vec![],
         )),
         "siliconflow" => Some((
-            "https://api.siliconflow.cn/v1/audio/transcriptions",
-            "FunAudioLLM/SenseVoiceSmall",
-            &[],
+            "https://api.siliconflow.cn/v1/audio/transcriptions".to_string(),
+            "FunAudioLLM/SenseVoiceSmall".to_string(),
+            vec![],
         )),
+        "custom-whisper" => {
+            let endpoint = custom_stt_base_url?.trim();
+            let model = custom_stt_model?.trim();
+            if endpoint.is_empty() || model.is_empty() {
+                return None;
+            }
+            Some((endpoint.to_string(), model.to_string(), vec![]))
+        }
         _ => None,
     }
+}
+
+fn xiaomi_mimo_config(
+    custom_stt_base_url: Option<&str>,
+    custom_stt_model: Option<&str>,
+) -> (String, String) {
+    let endpoint = stt::xiaomi_mimo::normalize_xiaomi_endpoint(
+        custom_stt_base_url
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or("https://token-plan-cn.xiaomimimo.com/v1"),
+    );
+    let model = custom_stt_model
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or("mimo-v2.5")
+        .to_string();
+    (endpoint, model)
 }
 
 #[tauri::command]
 async fn test_stt_connection(
     api_key: String,
     provider: String,
+    stt_base_url: Option<String>,
+    stt_model: Option<String>,
     token_store: tauri::State<'_, SessionTokenStore>,
 ) -> Result<bool, String> {
     if provider.is_empty() {
@@ -262,8 +294,10 @@ async fn test_stt_connection(
                 .map_err(|e| e.to_string())?;
             Ok(resp.status().is_success())
         }
-        "glm-asr" | "openai-whisper" | "groq-whisper" | "siliconflow" => {
-            let Some((endpoint, model, extra_fields)) = whisper_compat_config(&provider) else {
+        "glm-asr" | "openai-whisper" | "groq-whisper" | "siliconflow" | "custom-whisper" => {
+            let Some((endpoint, model, extra_fields)) =
+                whisper_compat_config(&provider, stt_base_url.as_deref(), stt_model.as_deref())
+            else {
                 return Err(format!("Unknown STT provider: {}", provider));
             };
 
@@ -275,17 +309,41 @@ async fn test_stt_connection(
                 .mime_str("audio/wav")
                 .map_err(|e| e.to_string())?;
             let mut form = reqwest::multipart::Form::new()
-                .text("model", model.to_string())
+                .text("model", model)
                 .part("file", file_part);
-            for &(key, value) in extra_fields {
-                form = form.text(key.to_string(), value.to_string());
+            for (key, value) in extra_fields {
+                form = form.text(key, value);
             }
 
             let client = reqwest::Client::new();
             let resp = client
-                .post(endpoint)
+                .post(&endpoint)
                 .header("Authorization", format!("Bearer {}", api_key))
                 .multipart(form)
+                .timeout(std::time::Duration::from_secs(15))
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(resp.status().is_success())
+        }
+        "xiaomi-mimo" => {
+            let (endpoint, model) = xiaomi_mimo_config(stt_base_url.as_deref(), stt_model.as_deref());
+
+            let body = serde_json::json!({
+                "model": model,
+                "messages": [{
+                    "role": "user",
+                    "content": "hi"
+                }],
+                "max_completion_tokens": 1
+            });
+
+            let client = reqwest::Client::new();
+            let resp = client
+                .post(&endpoint)
+                .header("api-key", api_key)
+                .header("Content-Type", "application/json")
+                .json(&body)
                 .timeout(std::time::Duration::from_secs(15))
                 .send()
                 .await
@@ -416,6 +474,8 @@ async fn fetch_llm_models(api_key: String, base_url: String) -> Result<Vec<Strin
 async fn bench_stt_connection(
     api_key: String,
     provider: String,
+    stt_base_url: Option<String>,
+    stt_model: Option<String>,
     token_store: tauri::State<'_, SessionTokenStore>,
 ) -> Result<u32, String> {
     if provider.is_empty() {
@@ -485,8 +545,10 @@ async fn bench_stt_connection(
             }
             Ok(elapsed)
         }
-        "glm-asr" | "openai-whisper" | "groq-whisper" | "siliconflow" => {
-            let Some((endpoint, model, extra_fields)) = whisper_compat_config(&provider) else {
+        "glm-asr" | "openai-whisper" | "groq-whisper" | "siliconflow" | "custom-whisper" => {
+            let Some((endpoint, model, extra_fields)) =
+                whisper_compat_config(&provider, stt_base_url.as_deref(), stt_model.as_deref())
+            else {
                 return Err(format!("Unknown STT provider: {}", provider));
             };
 
@@ -498,18 +560,47 @@ async fn bench_stt_connection(
                 .mime_str("audio/wav")
                 .map_err(|e| e.to_string())?;
             let mut form = reqwest::multipart::Form::new()
-                .text("model", model.to_string())
+                .text("model", model)
                 .part("file", file_part);
-            for &(key, value) in extra_fields {
-                form = form.text(key.to_string(), value.to_string());
+            for (key, value) in extra_fields {
+                form = form.text(key, value);
             }
 
             let client = reqwest::Client::new();
             let t0 = std::time::Instant::now();
             let resp = client
-                .post(endpoint)
+                .post(&endpoint)
                 .header("Authorization", format!("Bearer {}", api_key))
                 .multipart(form)
+                .timeout(std::time::Duration::from_secs(15))
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
+            let elapsed = t0.elapsed().as_millis() as u32;
+            if !resp.status().is_success() {
+                return Err(format!("HTTP {}", resp.status()));
+            }
+            Ok(elapsed)
+        }
+        "xiaomi-mimo" => {
+            let (endpoint, model) = xiaomi_mimo_config(stt_base_url.as_deref(), stt_model.as_deref());
+
+            let body = serde_json::json!({
+                "model": model,
+                "messages": [{
+                    "role": "user",
+                    "content": "hi"
+                }],
+                "max_completion_tokens": 1
+            });
+
+            let client = reqwest::Client::new();
+            let t0 = std::time::Instant::now();
+            let resp = client
+                .post(&endpoint)
+                .header("api-key", api_key)
+                .header("Content-Type", "application/json")
+                .json(&body)
                 .timeout(std::time::Duration::from_secs(15))
                 .send()
                 .await

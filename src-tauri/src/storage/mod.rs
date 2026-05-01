@@ -12,6 +12,8 @@ use crate::llm::PolishMode;
 pub struct AppConfig {
     pub stt_provider: String,
     pub stt_api_key: String,
+    pub stt_base_url: String,
+    pub stt_model: String,
     pub stt_language: String,
     pub llm_provider: String,
     pub llm_api_key: String,
@@ -42,6 +44,8 @@ impl Default for AppConfig {
         Self {
             stt_provider: "glm-asr".to_string(),
             stt_api_key: String::new(),
+            stt_base_url: String::new(),
+            stt_model: String::new(),
             stt_language: "multi".to_string(),
             llm_provider: "deepseek".to_string(),
             llm_api_key: String::new(),

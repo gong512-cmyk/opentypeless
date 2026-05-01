@@ -1,4 +1,5 @@
 use anyhow::Result;
+#[cfg(not(target_os = "macos"))]
 use enigo::{Direction, Enigo, Key, Keyboard, Settings as EnigoSettings};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -187,16 +188,25 @@ impl PipelineHandle {
         let mut clipboard = arboard::Clipboard::new().ok()?;
         let backup = clipboard.get_text().ok();
 
-        if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
-            #[cfg(target_os = "macos")]
-            let modifier = Key::Meta;
-            #[cfg(not(target_os = "macos"))]
-            let modifier = Key::Control;
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("osascript")
+                .args([
+                    "-e",
+                    r#"tell application "System Events" to keystroke "c" using command down"#,
+                ])
+                .status();
+        }
 
-            let pressed = enigo.key(modifier, Direction::Press).is_ok();
-            if pressed {
-                let _ = enigo.key(Key::Unicode('c'), Direction::Click);
-                let _ = enigo.key(modifier, Direction::Release);
+        #[cfg(not(target_os = "macos"))]
+        {
+            if let Ok(mut enigo) = Enigo::new(&EnigoSettings::default()) {
+                let modifier = Key::Control;
+                let pressed = enigo.key(modifier, Direction::Press).is_ok();
+                if pressed {
+                    let _ = enigo.key(Key::Unicode('c'), Direction::Click);
+                    let _ = enigo.key(modifier, Direction::Release);
+                }
             }
         }
 
@@ -342,6 +352,8 @@ impl PipelineHandle {
         let mut provider = stt::create_provider(
             &config_data.stt_provider,
             Some(self.shared_client.clone()),
+            Some(&config_data.stt_base_url),
+            Some(&config_data.stt_model),
             Some(&config_data.whisper_cli_path),
             Some(&config_data.whisper_model_path),
             Some(&config_data.whisper_lora_path),
@@ -851,7 +863,16 @@ impl PipelineHandle {
 
         // Try keyboard first if configured, fall back to clipboard if no accessibility
         let effective_mode = if config.output_mode == "keyboard" && is_accessibility_trusted() {
-            OutputMode::Keyboard
+            #[cfg(target_os = "macos")]
+            {
+                // enigo text input may call HIToolbox APIs that must run on main queue.
+                // Use clipboard paste on macOS to avoid sporadic SIGTRAP crashes.
+                OutputMode::Clipboard
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                OutputMode::Keyboard
+            }
         } else {
             OutputMode::Clipboard
         };
@@ -880,6 +901,20 @@ impl PipelineHandle {
             "openai-whisper" => "https://api.openai.com/v1/audio/transcriptions".to_string(),
             "groq-whisper" => "https://api.groq.com/openai/v1/audio/transcriptions".to_string(),
             "siliconflow" => "https://api.siliconflow.cn/v1/audio/transcriptions".to_string(),
+            "custom-whisper" => {
+                if config.stt_base_url.trim().is_empty() {
+                    tracing::debug!("custom-whisper endpoint is empty, skipping pre-warm");
+                    return;
+                }
+                config.stt_base_url.clone()
+            }
+            "xiaomi-mimo" => {
+                if config.stt_base_url.trim().is_empty() {
+                    "https://token-plan-cn.xiaomimimo.com/v1/chat/completions".to_string()
+                } else {
+                    stt::xiaomi_mimo::normalize_xiaomi_endpoint(&config.stt_base_url)
+                }
+            }
             "deepgram" => "https://api.deepgram.com/v1/listen".to_string(),
             "assemblyai" => "https://api.assemblyai.com/v2/transcript".to_string(),
             _ => {

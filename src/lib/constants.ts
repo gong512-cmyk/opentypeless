@@ -31,6 +31,8 @@ export const STT_PROVIDERS = [
   { value: 'openai-whisper', label: 'OpenAI Whisper' },
   { value: 'groq-whisper', label: 'Groq Whisper' },
   { value: 'siliconflow', label: 'SiliconFlow (硅基流动)' },
+  { value: 'xiaomi-mimo', label: 'Xiaomi MiMo (音频理解)' },
+  { value: 'custom-whisper', label: 'Custom Whisper-Compatible' },
   { value: 'local-whisper', label: 'Local Whisper (离线)' },
 ] as const
 
